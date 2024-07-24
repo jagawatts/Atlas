@@ -1,0 +1,879 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Meta name="ExplicitAutoJoints">true</Meta>
+	<External>null</External>
+	<External>nil</External>
+	<Item class="Folder" referent="RBXE8C0842E0BD4458AB8659323E3FB316A">
+		<Properties>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">Atlas</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<BinaryString name="Tags"></BinaryString>
+		</Properties>
+		<Item class="Folder" referent="RBXB01F7500A68740959D21FB74C2F9BE94">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+				<bool name="DefinesCapabilities">false</bool>
+				<string name="Name">ServerScriptService</string>
+				<int64 name="SourceAssetId">-1</int64>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+			<Item class="Script" referent="RBXA9EA4B7EF3E143869ADDFC2F2D322C45">
+				<Properties>
+					<BinaryString name="AttributesSerialize"></BinaryString>
+					<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+					<bool name="DefinesCapabilities">false</bool>
+					<bool name="Disabled">false</bool>
+					<Content name="LinkedSource"><null></null></Content>
+					<string name="Name">Atlas</string>
+					<token name="RunContext">0</token>
+					<string name="ScriptGuid">{2EF39091-EA71-4C95-B7AB-3D66BC99D65C}</string>
+					<ProtectedString name="Source"><![CDATA[local DataStoreService = game:GetService("DataStoreService")
+local LocalizationService = game:GetService("LocalizationService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local Remote = Instance.new("RemoteEvent",ReplicatedStorage)
+local AtlasStore = DataStoreService:GetDataStore("Atlas")
+
+Remote.Name = "AtlasRemote"
+local regionTable = {}
+local updateQueue = {}
+
+local randomCountryCodes = true
+
+local countryCoordinates = {
+	--Top 14 countries that play Roblox
+	["US"] = {lat = 40.5987, lon = -101.2172},  -- United States
+	["CA"] = {lat = 57.9601, lon = -101.7331},  -- Canada
+	["GB"] = {lat = 46.7298, lon = 2.4321},  -- United Kingdom
+	["FR"] = {lat = 46.2276, lon = 2.2137},  -- France
+	["DE"] = {lat = 51.0440, lon = 10.3309},  -- Germany
+	["JP"] = {lat = 36.5287, lon = 138.3346},  -- Japan
+	["AU"] = {lat = -25.0056, lon = 134.1126},  -- Australia
+	["BR"] = {lat = -8.1716, lon = -55.8428},  -- Brazil
+	["RU"] = {lat = 62.3676, lon =  93.1462},  -- Russia
+	["IN"] = {lat = 23.3891, lon = 78.7962},  -- India
+	["PH"] = {lat = 12.4743, lon = 122.9688}, -- Phillipines
+	["NZ"] = {lat = -42.7336, lon = 171.8895}, -- New Zealand
+	["DK"] = {lat = 55.4553, lon = 10.0795}, -- Denmark
+	["LT"] = {lat = 55.5124, lon = 23.9120}, -- Lithuania
+	["TH"] = {lat = 15.7587, lon = 100.8304}, -- Thailand
+	-- Add more as needed
+}
+
+-- Create a list of keys from the table
+local keys = {}
+for k in pairs(countryCoordinates) do
+	table.insert(keys, k)
+end
+
+-- Select a random key
+local random = keys[math.random(1, #keys)]
+
+local function processUpdateQueue()
+	if next(updateQueue) == nil then return end 
+
+	local success, err = pcall(function()
+		AtlasStore:UpdateAsync("RegionData", function(oldData)
+			local newData = oldData or {}
+			for region, increment in pairs(updateQueue) do
+				newData[region] = (newData[region] or 0) + increment
+				if newData[region] <= 0 then
+					newData[region] = nil
+				end
+			end
+			return newData
+		end)
+	end)
+
+	if success then
+		updateQueue = {} 
+	else
+		error("Failed to update RegionData:", err)
+	end
+	Remote:FireAllClients(regionTable)
+
+end
+
+local function queueUpdate(region, increment)
+	updateQueue[region] = (updateQueue[region] or 0) + increment
+end
+
+local function safeGetRegion(player)
+	local success, region = pcall(function()
+		return random or LocalizationService:GetCountryRegionForPlayerAsync(player)
+	end)
+
+	if success then
+		return region
+	else
+		error("Failed to get region for player", player.Name, ":", region)
+		return nil
+	end
+end
+
+local function updateRegionTableFromDatabase()
+	local success, result = pcall(function()
+		return AtlasStore:GetAsync("RegionData")
+	end)
+
+	if success and result then
+		for region, count in pairs(result) do
+			regionTable[region] = count
+		end
+	end
+
+	RemoteEvent:FireAllClients(regionTable)
+end
+
+Players.PlayerAdded:Connect(function(player)
+	local playerRegion = safeGetRegion(player)
+	if playerRegion then
+		regionTable[playerRegion] = (regionTable[playerRegion] or 0) + 1
+		queueUpdate(playerRegion, 1)
+		processUpdateQueue()
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	local playerRegion = safeGetRegion(player)
+	if playerRegion and regionTable[playerRegion] then
+		regionTable[playerRegion] = regionTable[playerRegion] - 1
+		queueUpdate(playerRegion, -1)
+		if regionTable[playerRegion] <= 0 then
+			regionTable[playerRegion] = nil
+		end
+		processUpdateQueue()
+	end
+end)
+
+game:BindToClose(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		local playerRegion = safeGetRegion(player)
+		if playerRegion and regionTable[playerRegion] then
+			regionTable[playerRegion] = regionTable[playerRegion] - 1
+			queueUpdate(playerRegion, -1)
+			if regionTable[playerRegion] <= 0 then
+				regionTable[playerRegion] = nil
+			end
+		end
+	end
+	processUpdateQueue()
+end)
+
+spawn(function()
+	while task.wait(30) do
+		updateRegionTableFromDatabase()
+	end
+end)]]></ProtectedString>
+					<int64 name="SourceAssetId">-1</int64>
+					<BinaryString name="Tags"></BinaryString>
+				</Properties>
+			</Item>
+		</Item>
+		<Item class="Folder" referent="RBX122B9D3CD198405592B430903175DF87">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+				<bool name="DefinesCapabilities">false</bool>
+				<string name="Name">StarterGui</string>
+				<int64 name="SourceAssetId">-1</int64>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+			<Item class="ScreenGui" referent="RBX97C7329E150B41C095E986DCF74B33A1">
+				<Properties>
+					<BinaryString name="AttributesSerialize"></BinaryString>
+					<bool name="AutoLocalize">true</bool>
+					<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+					<bool name="ClipToDeviceSafeArea">true</bool>
+					<bool name="DefinesCapabilities">false</bool>
+					<int name="DisplayOrder">0</int>
+					<bool name="Enabled">true</bool>
+					<string name="Name">Atlas</string>
+					<bool name="ResetOnSpawn">true</bool>
+					<Ref name="RootLocalizationTable">null</Ref>
+					<token name="SafeAreaCompatibility">1</token>
+					<token name="ScreenInsets">1</token>
+					<token name="SelectionBehaviorDown">0</token>
+					<token name="SelectionBehaviorLeft">0</token>
+					<token name="SelectionBehaviorRight">0</token>
+					<token name="SelectionBehaviorUp">0</token>
+					<bool name="SelectionGroup">false</bool>
+					<int64 name="SourceAssetId">-1</int64>
+					<BinaryString name="Tags"></BinaryString>
+					<token name="ZIndexBehavior">1</token>
+				</Properties>
+				<Item class="Frame" referent="RBXD6A15940CFDF41F3BE3BDD77328B312F">
+					<Properties>
+						<bool name="Active">false</bool>
+						<Vector2 name="AnchorPoint">
+							<X>0</X>
+							<Y>0</Y>
+						</Vector2>
+						<BinaryString name="AttributesSerialize"></BinaryString>
+						<bool name="AutoLocalize">true</bool>
+						<token name="AutomaticSize">0</token>
+						<Color3 name="BackgroundColor3">
+							<R>0.549019635</R>
+							<G>0.549019635</G>
+							<B>0.549019635</B>
+						</Color3>
+						<float name="BackgroundTransparency">0.5</float>
+						<Color3 name="BorderColor3">
+							<R>0</R>
+							<G>0</G>
+							<B>0</B>
+						</Color3>
+						<token name="BorderMode">0</token>
+						<int name="BorderSizePixel">0</int>
+						<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+						<bool name="ClipsDescendants">false</bool>
+						<bool name="DefinesCapabilities">false</bool>
+						<bool name="Draggable">false</bool>
+						<bool name="Interactable">true</bool>
+						<int name="LayoutOrder">0</int>
+						<string name="Name">Frame</string>
+						<Ref name="NextSelectionDown">null</Ref>
+						<Ref name="NextSelectionLeft">null</Ref>
+						<Ref name="NextSelectionRight">null</Ref>
+						<Ref name="NextSelectionUp">null</Ref>
+						<UDim2 name="Position">
+							<XS>0.257225245</XS>
+							<XO>0</XO>
+							<YS>0.434466034</YS>
+							<YO>0</YO>
+						</UDim2>
+						<Ref name="RootLocalizationTable">null</Ref>
+						<float name="Rotation">0</float>
+						<bool name="Selectable">false</bool>
+						<token name="SelectionBehaviorDown">0</token>
+						<token name="SelectionBehaviorLeft">0</token>
+						<token name="SelectionBehaviorRight">0</token>
+						<token name="SelectionBehaviorUp">0</token>
+						<bool name="SelectionGroup">false</bool>
+						<Ref name="SelectionImageObject">null</Ref>
+						<int name="SelectionOrder">0</int>
+						<UDim2 name="Size">
+							<XS>0.465772808</XS>
+							<XO>0</XO>
+							<YS>0.437239915</YS>
+							<YO>0</YO>
+						</UDim2>
+						<token name="SizeConstraint">0</token>
+						<int64 name="SourceAssetId">-1</int64>
+						<token name="Style">0</token>
+						<BinaryString name="Tags"></BinaryString>
+						<bool name="Visible">true</bool>
+						<int name="ZIndex">1</int>
+					</Properties>
+					<Item class="LocalScript" referent="RBX0AD9309CF83E4BE4BFD235ABCDFF49FC">
+						<Properties>
+							<BinaryString name="AttributesSerialize"></BinaryString>
+							<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+							<bool name="DefinesCapabilities">false</bool>
+							<bool name="Disabled">false</bool>
+							<Content name="LinkedSource"><null></null></Content>
+							<string name="Name">LocalScript</string>
+							<token name="RunContext">0</token>
+							<string name="ScriptGuid">{6C317977-0CF1-4018-A7E4-159EC4715142}</string>
+							<ProtectedString name="Source"><![CDATA[local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Remote = ReplicatedStorage:WaitForChild("AtlasRemote")
+
+local atlasModule = require(script:WaitForChild("Main"))
+
+local Frame = script.Parent
+local CircleTemplate = Frame:WaitForChild("Circle")
+local LabelTemplate = Frame:WaitForChild("TextLabel")
+local LineTemplate = Frame:WaitForChild("Line")
+
+local currentRegionData = {}
+
+-- Listen for RemoteEvent to receive region data
+Remote.OnClientEvent:Connect(function(regionData)
+	atlasModule.updateCountryLabels(regionData, LabelTemplate, CircleTemplate, Frame, Frame.AbsoluteSize.X, Frame.AbsoluteSize.Y)
+end)
+
+-- Listen for changes in Frame size or position
+Frame.Changed:Connect(function(property)
+	if property == "AbsoluteSize" or property == "Position" then
+		atlasModule.updateAllPositions(Frame)
+	end
+end)
+
+-- Initial update
+atlasModule.updateAllPositions(Frame)]]></ProtectedString>
+							<int64 name="SourceAssetId">-1</int64>
+							<BinaryString name="Tags"></BinaryString>
+						</Properties>
+						<Item class="ModuleScript" referent="RBXA804C0C715774E75AFF759DFA0E61D71">
+							<Properties>
+								<BinaryString name="AttributesSerialize"></BinaryString>
+								<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+								<bool name="DefinesCapabilities">false</bool>
+								<Content name="LinkedSource"><null></null></Content>
+								<string name="Name">Main</string>
+								<string name="ScriptGuid">{2455693A-62C3-4770-8965-FEA5161E2B8B}</string>
+								<ProtectedString name="Source"><![CDATA[
+-- Table of country codes and their approximate center coordinates
+local countryCoordinates = {
+	US = {lat = 40.5987, lon = -101.2172},  -- United States
+	CA = {lat = 60.0781, lon = -111.70234},  -- Canada
+	GB = {lat = 46.7298, lon = 2.4321},  -- United Kingdom
+	FR = {lat = 46.2276, lon = 2.2137},  -- France
+	DE = {lat = 51.0440, lon = 10.3309},  -- Germany
+	JP = {lat = 36.5287, lon = 138.3346},  -- Japan
+	AU = {lat = -25.0056, lon = 134.1126},  -- Australia
+	BR = {lat = -8.1716, lon = -55.8428},  -- Brazil
+	RU = {lat = 62.3676, lon = 93.1462},  -- Russia
+	IN = {lat = 23.3891, lon = 78.7962},  -- India
+	-- Add more countries as needed
+}
+
+local currentRegionData = {}
+
+local function latLonToScreen(lat, lon, mapWidth, mapHeight)
+	local x = (mapWidth * (180 + lon) / 360) % mapWidth
+	local y = (mapHeight * (90 - lat) / 180) % mapHeight
+	return x, y
+end
+
+-- Update the position of a GUI element based on latitude and longitude
+local function updateGuiPosition(guiElement, lat, lon, mapWidth, mapHeight, framePosition)
+	local x, y = latLonToScreen(lat, lon, mapWidth, mapHeight)
+	local adjustedX = x + framePosition.X.Offset
+	local adjustedY = y + framePosition.Y.Offset
+
+	guiElement.Position = UDim2.new(0, adjustedX, 0, adjustedY)
+end
+
+-- Clone and position a text label for each country code
+local function createCountryLabel(countryCode, playerCount, labelTemplate, circleTemplate, mapFrame, mapWidth, mapHeight)
+	local lat, lon = countryCoordinates[countryCode].lat, countryCoordinates[countryCode].lon
+	if not lat or not lon then
+		warn("Could not create label for country code: " .. countryCode)
+		return nil
+	end
+
+	local newLabel = labelTemplate:Clone()
+	newLabel.Name = countryCode .. "_Label"
+	newLabel.Parent = mapFrame
+	newLabel.Text = countryCode .. ": " .. playerCount
+
+	-- Position the label
+	updateGuiPosition(newLabel, lat, lon, mapWidth, mapHeight, mapFrame.Position)
+
+	-- Adjust the label position to be centered above the circle
+	local circleSize = circleTemplate.Size
+	newLabel.Position = UDim2.new(
+		newLabel.Position.X.Scale,
+		newLabel.Position.X.Offset - newLabel.Size.X.Offset / 2 + circleSize.X.Offset / 2,
+		newLabel.Position.Y.Scale,
+		newLabel.Position.Y.Offset - circleSize.Y.Offset - 17  -- 5 pixels above the circle
+	)
+
+	-- Make the label visible
+	newLabel.Visible = true
+
+	-- Create and position the circle
+	local newCircle = circleTemplate:Clone()
+	newCircle.Name = countryCode .. "_Circle"
+	newCircle.Parent = mapFrame
+	updateGuiPosition(newCircle, lat, lon, mapWidth, mapHeight, mapFrame.Position)
+	newCircle.Visible = true
+
+	return newLabel, newCircle
+end
+
+-- Draw a line between two countries
+local function drawLineBetweenCountries(country1, country2, mapFrame, mapWidth, mapHeight, LineTemplate)
+	local lat1, lon1 = countryCoordinates[country1].lat, countryCoordinates[country1].lon
+	local lat2, lon2 = countryCoordinates[country2].lat, countryCoordinates[country2].lon
+
+	local line = LineTemplate:Clone()
+	line.Parent = mapFrame
+
+	-- Calculate screen positions for both countries
+	local x1, y1 = latLonToScreen(lat1, lon1, mapWidth, mapHeight)
+	local x2, y2 = latLonToScreen(lat2, lon2, mapWidth, mapHeight)
+
+	-- Set the line's start position
+	local adjustedX = x1 - mapFrame.Position.X.Offset
+	local adjustedY = y1 - mapFrame.Position.Y.Offset
+
+	line.Position = UDim2.new(0, adjustedX, 0, adjustedY)
+
+	-- Calculate the distance between the two points
+	local distanceX = x2 - x1
+	local distanceY = y2 - y1
+	local distance = math.sqrt(distanceX^2 + distanceY^2)
+
+	-- Set the line's size to a smaller value
+	local lineThickness = 1 -- Adjust this value to change the thickness of the line
+	line.Size = UDim2.new(0, distance, 0, lineThickness) -- Use the full distance
+
+	-- Adjust rotation to connect the two points
+	local angle = math.atan2(distanceY, distanceX) * (180 / math.pi)
+	line.Rotation = angle
+
+	line.Visible = true
+end
+-- Update country player counts and create labels
+local function updateCountryLabels(regionData, labelTemplate, circleTemplate, mapFrame, mapWidth, mapHeight)
+	-- Remove existing labels, circles, and lines
+	for _, child in ipairs(mapFrame:GetChildren()) do
+		if child.Name:match("_Label$") or child.Name:match("_Circle$") or child.Name:match("_Line$") then
+			child:Destroy()
+		end
+	end
+
+	-- Create labels and circles for each country
+	for countryCode, playerCount in pairs(regionData) do
+		createCountryLabel(countryCode, playerCount, labelTemplate, circleTemplate, mapFrame, mapWidth, mapHeight)
+	end
+
+	-- Draw lines between every pair of countries
+	local countryCodes = table.clone(countryCoordinates) -- Get all country codes
+	for i = 1, #countryCodes do
+		for j = i + 1, #countryCodes do
+			drawLineBetweenCountries(countryCodes[i], countryCodes[j], mapFrame, mapWidth, mapHeight)
+		end
+	end
+
+	currentRegionData = regionData
+end
+
+-- Function to update all label and circle positions
+local function updateAllPositions(Frame)
+	local mapWidth = Frame.AbsoluteSize.X
+	local mapHeight = Frame.AbsoluteSize.Y
+	local framePosition = Frame.Position
+
+	for countryCode, playerCount in pairs(currentRegionData) do
+		local label = Frame:FindFirstChild(countryCode .. "_Label")
+		local circle = Frame:FindFirstChild(countryCode .. "_Circle")
+
+		if label and circle then
+			local lat, lon = countryCoordinates[countryCode].lat, countryCoordinates[countryCode].lon
+			updateGuiPosition(label, lat, lon, mapWidth, mapHeight, framePosition)
+			updateGuiPosition(circle, lat, lon, mapWidth, mapHeight, framePosition)
+
+			-- Adjust the label position to be centered above the circle
+			local circleSize = circle.Size
+			label.Position = UDim2.new(
+				label.Position.X.Scale,
+				label.Position.X.Offset - label.Size.X.Offset / 2 + circleSize.X.Offset / 2,
+				label.Position.Y.Scale,
+				label.Position.Y.Offset - circleSize.Y.Offset - 17  -- 5 pixels above the circle
+			)
+		end
+	end
+end
+
+return{
+	updateCountryLabels = updateCountryLabels,
+	updateGuiPosition = updateGuiPosition,
+	updateAllPositions = updateAllPositions,
+	drawLineBetweenCountries = drawLineBetweenCountries,
+	createCountryLabel = createCountryLabel,
+	latLonToScreen = latLonToScreen,
+}]]></ProtectedString>
+								<int64 name="SourceAssetId">-1</int64>
+								<BinaryString name="Tags"></BinaryString>
+							</Properties>
+						</Item>
+					</Item>
+					<Item class="ImageLabel" referent="RBX2DC98FA3016144E9B36A2172A7A36C55">
+						<Properties>
+							<bool name="Active">false</bool>
+							<Vector2 name="AnchorPoint">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<BinaryString name="AttributesSerialize"></BinaryString>
+							<bool name="AutoLocalize">true</bool>
+							<token name="AutomaticSize">0</token>
+							<Color3 name="BackgroundColor3">
+								<R>1</R>
+								<G>1</G>
+								<B>1</B>
+							</Color3>
+							<float name="BackgroundTransparency">1</float>
+							<Color3 name="BorderColor3">
+								<R>0</R>
+								<G>0</G>
+								<B>0</B>
+							</Color3>
+							<token name="BorderMode">0</token>
+							<int name="BorderSizePixel">0</int>
+							<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+							<bool name="ClipsDescendants">false</bool>
+							<bool name="DefinesCapabilities">false</bool>
+							<bool name="Draggable">false</bool>
+							<Content name="Image"><url>rbxassetid://9208578430</url></Content>
+							<Color3 name="ImageColor3">
+								<R>0.333333343</R>
+								<G>1</G>
+								<B>0</B>
+							</Color3>
+							<Vector2 name="ImageRectOffset">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<Vector2 name="ImageRectSize">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<float name="ImageTransparency">0</float>
+							<bool name="Interactable">true</bool>
+							<int name="LayoutOrder">0</int>
+							<string name="Name">Circle</string>
+							<Ref name="NextSelectionDown">null</Ref>
+							<Ref name="NextSelectionLeft">null</Ref>
+							<Ref name="NextSelectionRight">null</Ref>
+							<Ref name="NextSelectionUp">null</Ref>
+							<UDim2 name="Position">
+								<XS>0</XS>
+								<XO>0</XO>
+								<YS>0</YS>
+								<YO>0</YO>
+							</UDim2>
+							<token name="ResampleMode">0</token>
+							<Ref name="RootLocalizationTable">null</Ref>
+							<float name="Rotation">0</float>
+							<token name="ScaleType">0</token>
+							<bool name="Selectable">false</bool>
+							<token name="SelectionBehaviorDown">0</token>
+							<token name="SelectionBehaviorLeft">0</token>
+							<token name="SelectionBehaviorRight">0</token>
+							<token name="SelectionBehaviorUp">0</token>
+							<bool name="SelectionGroup">false</bool>
+							<Ref name="SelectionImageObject">null</Ref>
+							<int name="SelectionOrder">0</int>
+							<UDim2 name="Size">
+								<XS>0.00999999978</XS>
+								<XO>0</XO>
+								<YS>0.0149999997</YS>
+								<YO>0</YO>
+							</UDim2>
+							<token name="SizeConstraint">0</token>
+							<Rect2D name="SliceCenter">
+								<min>
+									<X>0</X>
+									<Y>0</Y>
+								</min>
+								<max>
+									<X>0</X>
+									<Y>0</Y>
+								</max>
+							</Rect2D>
+							<float name="SliceScale">1</float>
+							<int64 name="SourceAssetId">-1</int64>
+							<BinaryString name="Tags"></BinaryString>
+							<UDim2 name="TileSize">
+								<XS>1</XS>
+								<XO>0</XO>
+								<YS>1</YS>
+								<YO>0</YO>
+							</UDim2>
+							<bool name="Visible">false</bool>
+							<int name="ZIndex">4</int>
+						</Properties>
+					</Item>
+					<Item class="ImageLabel" referent="RBX5436016D8E7D4389BC605875CB386B8D">
+						<Properties>
+							<bool name="Active">false</bool>
+							<Vector2 name="AnchorPoint">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<BinaryString name="AttributesSerialize"></BinaryString>
+							<bool name="AutoLocalize">true</bool>
+							<token name="AutomaticSize">0</token>
+							<Color3 name="BackgroundColor3">
+								<R>1</R>
+								<G>1</G>
+								<B>1</B>
+							</Color3>
+							<float name="BackgroundTransparency">1</float>
+							<Color3 name="BorderColor3">
+								<R>0</R>
+								<G>0</G>
+								<B>0</B>
+							</Color3>
+							<token name="BorderMode">0</token>
+							<int name="BorderSizePixel">0</int>
+							<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+							<bool name="ClipsDescendants">false</bool>
+							<bool name="DefinesCapabilities">false</bool>
+							<bool name="Draggable">false</bool>
+							<Content name="Image"><url>http://www.roblox.com/asset/?id=18614312020</url></Content>
+							<Color3 name="ImageColor3">
+								<R>0.274509817</R>
+								<G>0.274509817</G>
+								<B>0.274509817</B>
+							</Color3>
+							<Vector2 name="ImageRectOffset">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<Vector2 name="ImageRectSize">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<float name="ImageTransparency">0</float>
+							<bool name="Interactable">true</bool>
+							<int name="LayoutOrder">0</int>
+							<string name="Name">ImageLabel</string>
+							<Ref name="NextSelectionDown">null</Ref>
+							<Ref name="NextSelectionLeft">null</Ref>
+							<Ref name="NextSelectionRight">null</Ref>
+							<Ref name="NextSelectionUp">null</Ref>
+							<UDim2 name="Position">
+								<XS>-5.47695223e-08</XS>
+								<XO>0</XO>
+								<YS>0</YS>
+								<YO>0</YO>
+							</UDim2>
+							<token name="ResampleMode">1</token>
+							<Ref name="RootLocalizationTable">null</Ref>
+							<float name="Rotation">0</float>
+							<token name="ScaleType">0</token>
+							<bool name="Selectable">false</bool>
+							<token name="SelectionBehaviorDown">0</token>
+							<token name="SelectionBehaviorLeft">0</token>
+							<token name="SelectionBehaviorRight">0</token>
+							<token name="SelectionBehaviorUp">0</token>
+							<bool name="SelectionGroup">false</bool>
+							<Ref name="SelectionImageObject">null</Ref>
+							<int name="SelectionOrder">0</int>
+							<UDim2 name="Size">
+								<XS>1</XS>
+								<XO>0</XO>
+								<YS>1</YS>
+								<YO>0</YO>
+							</UDim2>
+							<token name="SizeConstraint">0</token>
+							<Rect2D name="SliceCenter">
+								<min>
+									<X>0</X>
+									<Y>0</Y>
+								</min>
+								<max>
+									<X>0</X>
+									<Y>0</Y>
+								</max>
+							</Rect2D>
+							<float name="SliceScale">1</float>
+							<int64 name="SourceAssetId">-1</int64>
+							<BinaryString name="Tags"></BinaryString>
+							<UDim2 name="TileSize">
+								<XS>1</XS>
+								<XO>0</XO>
+								<YS>1</YS>
+								<YO>0</YO>
+							</UDim2>
+							<bool name="Visible">true</bool>
+							<int name="ZIndex">1</int>
+						</Properties>
+					</Item>
+					<Item class="TextLabel" referent="RBX2D0C64FDC1AF498B9C2A1B55B4043A36">
+						<Properties>
+							<bool name="Active">false</bool>
+							<Vector2 name="AnchorPoint">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<BinaryString name="AttributesSerialize"></BinaryString>
+							<bool name="AutoLocalize">true</bool>
+							<token name="AutomaticSize">0</token>
+							<Color3 name="BackgroundColor3">
+								<R>1</R>
+								<G>1</G>
+								<B>1</B>
+							</Color3>
+							<float name="BackgroundTransparency">1</float>
+							<Color3 name="BorderColor3">
+								<R>0</R>
+								<G>0</G>
+								<B>0</B>
+							</Color3>
+							<token name="BorderMode">0</token>
+							<int name="BorderSizePixel">0</int>
+							<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+							<bool name="ClipsDescendants">false</bool>
+							<bool name="DefinesCapabilities">false</bool>
+							<bool name="Draggable">false</bool>
+							<Font name="FontFace">
+								<Family><url>rbxasset://fonts/families/SourceSansPro.json</url></Family>
+								<Weight>400</Weight>
+								<Style>Normal</Style>
+								<CachedFaceId><url>rbxasset://fonts/SourceSansPro-Regular.ttf</url></CachedFaceId>
+							</Font>
+							<bool name="Interactable">true</bool>
+							<int name="LayoutOrder">0</int>
+							<float name="LineHeight">1</float>
+							<string name="LocalizationMatchIdentifier"></string>
+							<string name="LocalizationMatchedSourceText"></string>
+							<int name="MaxVisibleGraphemes">-1</int>
+							<string name="Name">TextLabel</string>
+							<Ref name="NextSelectionDown">null</Ref>
+							<Ref name="NextSelectionLeft">null</Ref>
+							<Ref name="NextSelectionRight">null</Ref>
+							<Ref name="NextSelectionUp">null</Ref>
+							<string name="OpenTypeFeatures"></string>
+							<UDim2 name="Position">
+								<XS>-0.00179468771</XS>
+								<XO>0</XO>
+								<YS>0.0148456059</YS>
+								<YO>0</YO>
+							</UDim2>
+							<bool name="RichText">false</bool>
+							<Ref name="RootLocalizationTable">null</Ref>
+							<float name="Rotation">0</float>
+							<bool name="Selectable">false</bool>
+							<token name="SelectionBehaviorDown">0</token>
+							<token name="SelectionBehaviorLeft">0</token>
+							<token name="SelectionBehaviorRight">0</token>
+							<token name="SelectionBehaviorUp">0</token>
+							<bool name="SelectionGroup">false</bool>
+							<Ref name="SelectionImageObject">null</Ref>
+							<int name="SelectionOrder">0</int>
+							<UDim2 name="Size">
+								<XS>0</XS>
+								<XO>58</XO>
+								<YS>0</YS>
+								<YO>18</YO>
+							</UDim2>
+							<token name="SizeConstraint">0</token>
+							<int64 name="SourceAssetId">-1</int64>
+							<BinaryString name="Tags"></BinaryString>
+							<string name="Text"></string>
+							<Color3 name="TextColor3">
+								<R>1</R>
+								<G>1</G>
+								<B>1</B>
+							</Color3>
+							<token name="TextDirection">0</token>
+							<bool name="TextScaled">false</bool>
+							<float name="TextSize">14</float>
+							<Color3 name="TextStrokeColor3">
+								<R>0</R>
+								<G>0</G>
+								<B>0</B>
+							</Color3>
+							<float name="TextStrokeTransparency">1</float>
+							<float name="TextTransparency">0</float>
+							<token name="TextTruncate">0</token>
+							<bool name="TextWrapped">false</bool>
+							<token name="TextXAlignment">2</token>
+							<token name="TextYAlignment">1</token>
+							<bool name="Visible">true</bool>
+							<int name="ZIndex">1</int>
+						</Properties>
+					</Item>
+					<Item class="ImageLabel" referent="RBX5FE2BCA1861946DFB2E3DADFA376976B">
+						<Properties>
+							<bool name="Active">false</bool>
+							<Vector2 name="AnchorPoint">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<BinaryString name="AttributesSerialize"></BinaryString>
+							<bool name="AutoLocalize">true</bool>
+							<token name="AutomaticSize">0</token>
+							<Color3 name="BackgroundColor3">
+								<R>0.31764707</R>
+								<G>1</G>
+								<B>0</B>
+							</Color3>
+							<float name="BackgroundTransparency">0</float>
+							<Color3 name="BorderColor3">
+								<R>0</R>
+								<G>0</G>
+								<B>0</B>
+							</Color3>
+							<token name="BorderMode">0</token>
+							<int name="BorderSizePixel">0</int>
+							<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+							<bool name="ClipsDescendants">false</bool>
+							<bool name="DefinesCapabilities">false</bool>
+							<bool name="Draggable">false</bool>
+							<Content name="Image"><url>rbxassetid://14846394635</url></Content>
+							<Color3 name="ImageColor3">
+								<R>0</R>
+								<G>1</G>
+								<B>0.117647067</B>
+							</Color3>
+							<Vector2 name="ImageRectOffset">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<Vector2 name="ImageRectSize">
+								<X>0</X>
+								<Y>0</Y>
+							</Vector2>
+							<float name="ImageTransparency">0</float>
+							<bool name="Interactable">true</bool>
+							<int name="LayoutOrder">0</int>
+							<string name="Name">Line</string>
+							<Ref name="NextSelectionDown">null</Ref>
+							<Ref name="NextSelectionLeft">null</Ref>
+							<Ref name="NextSelectionRight">null</Ref>
+							<Ref name="NextSelectionUp">null</Ref>
+							<UDim2 name="Position">
+								<XS>0</XS>
+								<XO>0</XO>
+								<YS>0</YS>
+								<YO>0</YO>
+							</UDim2>
+							<token name="ResampleMode">0</token>
+							<Ref name="RootLocalizationTable">null</Ref>
+							<float name="Rotation">0</float>
+							<token name="ScaleType">0</token>
+							<bool name="Selectable">false</bool>
+							<token name="SelectionBehaviorDown">0</token>
+							<token name="SelectionBehaviorLeft">0</token>
+							<token name="SelectionBehaviorRight">0</token>
+							<token name="SelectionBehaviorUp">0</token>
+							<bool name="SelectionGroup">false</bool>
+							<Ref name="SelectionImageObject">null</Ref>
+							<int name="SelectionOrder">0</int>
+							<UDim2 name="Size">
+								<XS>-0.0189399235</XS>
+								<XO>0</XO>
+								<YS>0</YS>
+								<YO>0</YO>
+							</UDim2>
+							<token name="SizeConstraint">0</token>
+							<Rect2D name="SliceCenter">
+								<min>
+									<X>0</X>
+									<Y>0</Y>
+								</min>
+								<max>
+									<X>0</X>
+									<Y>0</Y>
+								</max>
+							</Rect2D>
+							<float name="SliceScale">1</float>
+							<int64 name="SourceAssetId">-1</int64>
+							<BinaryString name="Tags"></BinaryString>
+							<UDim2 name="TileSize">
+								<XS>1</XS>
+								<XO>0</XO>
+								<YS>1</YS>
+								<YO>0</YO>
+							</UDim2>
+							<bool name="Visible">true</bool>
+							<int name="ZIndex">1</int>
+						</Properties>
+					</Item>
+				</Item>
+			</Item>
+		</Item>
+	</Item>
+</roblox>
